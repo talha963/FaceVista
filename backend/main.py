@@ -93,10 +93,17 @@ async def analyze_image(req: AnalyzeRequest):
     output_path = os.path.join(UPLOAD_DIR, output_filename)
     cv2.imwrite(output_path, final_image)
 
+    # Extract the 3D point cloud for the frontend to generate the 3D face
+    mesh_3d = []
+    if results.multi_face_landmarks:
+        for landmark in results.multi_face_landmarks[0].landmark:
+            mesh_3d.append({"x": landmark.x, "y": landmark.y, "z": landmark.z})
+
     return {
         "success": True, 
         "analyzed_filename": output_filename,
-        "analyzed_url": f"/uploads/{output_filename}"
+        "analyzed_url": f"/uploads/{output_filename}",
+        "mesh_3d": mesh_3d
     }
 
 @app.get("/health")
