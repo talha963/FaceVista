@@ -43,12 +43,13 @@ export async function POST(request: Request) {
       const backendData = await backendRes.json();
       
       if (backendData.success) {
-        // Return BOTH the original, the analyzed image, and the 3D mesh data!
+        // Return BOTH the original, the analyzed image, the 3D mesh data, AND surgery suggestions!
         return NextResponse.json({ 
           success: true, 
           originalUrl: `/uploads/${filename}`,
           analyzedUrl: backendData.analyzed_url,
-          mesh3d: backendData.mesh_3d
+          mesh3d: backendData.mesh_3d,
+          surgerySuggestions: backendData.surgery_suggestions || [],
         });
       } else {
         console.error("AI Analysis failed on backend", backendData);
