@@ -214,10 +214,18 @@ export function FaceMeshTextured({ sharedMesh, updateSignal, imageUrl }: any) {
   if (texture) texture.colorSpace = THREE.SRGBColorSpace;
   const geomRef = useRef<any>(null);
   const groupRef = useRef<any>(null);
-  const lastUpdate = useRef(0);
+  const currentPositions = useRef<Float32Array | null>(null);
 
   useEffect(() => {
-    // No normal computation needed for Basic Material
+    if (!sharedMesh) return;
+    if (!currentPositions.current || currentPositions.current.length !== sharedMesh.positions.length) {
+      currentPositions.current = new Float32Array(sharedMesh.positions);
+      if (geomRef.current) {
+         import('three').then(THREE => {
+           geomRef.current.setAttribute('position', new THREE.BufferAttribute(currentPositions.current, 3));
+         });
+      }
+    }
   }, [sharedMesh]);
 
   useFrame((state) => {
@@ -226,11 +234,20 @@ export function FaceMeshTextured({ sharedMesh, updateSignal, imageUrl }: any) {
        groupRef.current.rotation.x = Math.sin(state.clock.elapsedTime * 0.3) * 0.05;
        groupRef.current.position.y = Math.sin(state.clock.elapsedTime * 1.5) * 0.3;
     }
-    if (geomRef.current && lastUpdate.current !== updateSignal.current) {
-      geomRef.current.attributes.position.needsUpdate = true;
-      if (geomRef.current.attributes.uv) geomRef.current.attributes.uv.needsUpdate = true;
-      if (geomRef.current.index) geomRef.current.index.needsUpdate = true;
-      lastUpdate.current = updateSignal.current;
+    if (geomRef.current && currentPositions.current && sharedMesh) {
+       let needsUpdate = false;
+       for (let i = 0; i < currentPositions.current.length; i++) {
+          const diff = sharedMesh.positions[i] - currentPositions.current[i];
+          if (Math.abs(diff) > 0.005) {
+             currentPositions.current[i] += diff * 0.15;
+             needsUpdate = true;
+          } else {
+             currentPositions.current[i] = sharedMesh.positions[i];
+          }
+       }
+       if (needsUpdate) {
+         geomRef.current.attributes.position.needsUpdate = true;
+       }
     }
   });
 
@@ -238,11 +255,9 @@ export function FaceMeshTextured({ sharedMesh, updateSignal, imageUrl }: any) {
 
   return (
     <group>
-      
       <group ref={groupRef}>
         <mesh>
-           <bufferGeometry ref={geomRef} key={sharedMesh.id}>
-             <bufferAttribute attach="attributes-position" count={sharedMesh.positions.length / 3} array={sharedMesh.positions} itemSize={3} />
+           <bufferGeometry ref={geomRef}>
              <bufferAttribute attach="attributes-uv" count={sharedMesh.uvs.length / 2} array={sharedMesh.uvs} itemSize={2} />
              <bufferAttribute attach="index" count={sharedMesh.indices.length} array={sharedMesh.indices} itemSize={1} />
            </bufferGeometry>
@@ -255,6 +270,8 @@ export function FaceMeshTextured({ sharedMesh, updateSignal, imageUrl }: any) {
 
 export default function PatientPortal() {
   const [isLogin, setIsLogin] = useState(true);
+  const [fullName, setFullName] = useState("");
+  const [role, setRole] = useState("Doctor");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -270,11 +287,57 @@ export default function PatientPortal() {
   const [cheeksAdjustment, setCheeksAdjustment] = useState<number>(0);
   
   const adjustments = { nose: noseAdjustment, jaw: jawAdjustment, lips: lipsAdjustment, cheeks: cheeksAdjustment };
-  const { meshData: sharedMesh, updateSignal } = useSharedFaceMesh(selectedReport?.mesh3d, adjustments, selectedReport?.mesh3d);
+  const originalAdjustments = activeSuggestion ? {} : adjustments;
+  const { meshData: sharedMesh, updateSignal } = useSharedFaceMesh(selectedReport?.mesh3d, originalAdjustments, selectedReport?.mesh3d);
   const { meshData: suggestedMesh, updateSignal: suggestedUpdateSignal } = useSharedFaceMesh(activeSuggestion?.mesh3d, adjustments, selectedReport?.mesh3d);
   
   const [suiteTab, setSuiteTab] = useState("analytics");
   const [isFetchingSuggestions, setIsFetchingSuggestions] = useState(false);
+  
+  const [aiQuery, setAiQuery] = useState("");
+  const [isAiThinking, setIsAiThinking] = useState(false);
+  const [showReport, setShowReport] = useState(false);
+    const [reportImages, setReportImages] = useState<{orig: string, morph: string, origWireframe?: string, morphWireframe?: string} | null>(null);
+
+  const generateReport = () => {
+    const canvases = document.querySelectorAll('canvas');
+    if (canvases.length >= 4) {
+      setReportImages({
+         origWireframe: canvases[0].toDataURL('image/png'),
+         orig: canvases[1].toDataURL('image/png'),
+         morphWireframe: canvases[2].toDataURL('image/png'),
+         morph: canvases[3].toDataURL('image/png')
+      });
+    } else if (canvases.length > 0) {
+      setReportImages({
+         orig: canvases[1] ? canvases[1].toDataURL('image/png') : canvases[0].toDataURL('image/png'),
+         morph: canvases[canvases.length - 1].toDataURL('image/png')
+      });
+    }
+    setShowReport(true);
+  };
+  
+  const handleAiQuery = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!aiQuery.trim()) return;
+    setIsAiThinking(true);
+    setTimeout(() => {
+      const q = aiQuery.toLowerCase();
+      if (q.includes("nose") && (q.includes("small") || q.includes("shrink") || q.includes("thin"))) setNoseAdjustment(5);
+      if (q.includes("nose") && (q.includes("big") || q.includes("wide") || q.includes("large") || q.includes("broad"))) setNoseAdjustment(-5);
+      if (q.includes("jaw") && (q.includes("sharp") || q.includes("thin") || q.includes("narrow") || q.includes("v"))) setJawAdjustment(5);
+      if (q.includes("jaw") && (q.includes("wide") || q.includes("broad") || q.includes("square"))) setJawAdjustment(-5);
+      if (q.includes("lip") && (q.includes("big") || q.includes("plump") || q.includes("full") || q.includes("fill"))) setLipsAdjustment(5);
+      if (q.includes("lip") && (q.includes("small") || q.includes("thin"))) setLipsAdjustment(-5);
+      if (q.includes("cheek") && (q.includes("high") || q.includes("lift") || q.includes("bone"))) setCheeksAdjustment(5);
+      if (q.includes("cheek") && (q.includes("flat") || q.includes("low"))) setCheeksAdjustment(-5);
+      if (q.includes("reset") || q.includes("clear") || q.includes("undo")) {
+        setNoseAdjustment(0); setJawAdjustment(0); setLipsAdjustment(0); setCheeksAdjustment(0);
+      }
+      setIsAiThinking(false);
+      setAiQuery("");
+    }, 800);
+  };
 
   useEffect(() => {
     if (selectedReport && selectedReport.mesh3d && selectedReport.id && (!selectedReport.surgerySuggestions || selectedReport.surgerySuggestions.length === 0)) {
@@ -320,12 +383,19 @@ export default function PatientPortal() {
   const [historyDocs, setHistoryDocs] = useState<any[]>([]);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
 
+  // CRM State
+  const [patients, setPatients] = useState<any[]>([]);
+  const [selectedPatientId, setSelectedPatientId] = useState<string>("");
+  const [isCreatingPatient, setIsCreatingPatient] = useState(false);
+  const [newPatient, setNewPatient] = useState({ name: "", dob: "", gender: "", notes: "" });
+  const [selectedPatientForView, setSelectedPatientForView] = useState<any>(null);
+
   // Check Firebase Session
   useEffect(() => {
     const unsubscribe = auth.onAuthStateChanged((currentUser) => {
       setUser(currentUser);
       if (currentUser) {
-        fetchHistory(currentUser.uid);
+        fetchDashboardData(currentUser.uid);
         fetchSettings(currentUser.uid);
       }
     });
@@ -392,18 +462,22 @@ export default function PatientPortal() {
     }
   };
 
-  const fetchHistory = async (uid: string) => {
+  const fetchDashboardData = async (uid: string) => {
     setIsLoadingHistory(true);
     try {
-      const q = query(collection(db, "scans"), where("userId", "==", uid));
-      const querySnapshot = await getDocs(q);
-      const docs = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      
+      const scansQ = query(collection(db, "scans"), where("userId", "==", uid));
+      const scansSnapshot = await getDocs(scansQ);
+      const docs = scansSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       docs.sort((a: any, b: any) => (b.createdAt || 0) - (a.createdAt || 0));
-      
       setHistoryDocs(docs);
+
+      const patientsQ = query(collection(db, "patients"), where("doctorId", "==", uid));
+      const patientsSnapshot = await getDocs(patientsQ);
+      const pList = patientsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      pList.sort((a: any, b: any) => (b.createdAt || 0) - (a.createdAt || 0));
+      setPatients(pList);
     } catch (err) {
-      console.error("Error fetching history:", err);
+      console.error("Error fetching dashboard data:", err);
     } finally {
       setIsLoadingHistory(false);
     }
@@ -419,7 +493,16 @@ export default function PatientPortal() {
       if (isLogin) {
         await signInWithEmailAndPassword(auth, email, password);
       } else {
-        await createUserWithEmailAndPassword(auth, email, password);
+        const userCred = await createUserWithEmailAndPassword(auth, email, password);
+        await updateProfile(userCred.user, { displayName: fullName });
+        // Also save user to users collection to store role if needed
+        await setDoc(doc(db, "users", userCred.user.uid), {
+          uid: userCred.user.uid,
+          email: email,
+          name: fullName,
+          role: role,
+          createdAt: Date.now()
+        });
       }
     } catch (err: any) {
       console.error(err);
@@ -494,6 +577,7 @@ export default function PatientPortal() {
       try {
         await addDoc(collection(db, "scans"), {
           userId: user.uid,
+          patientId: selectedPatientId || "unassigned",
           originalImage: uploadData.originalUrl,
           analyzedImage: uploadData.analyzedUrl || uploadData.originalUrl,
           mesh3d: uploadData.mesh3d || null,
@@ -508,7 +592,7 @@ export default function PatientPortal() {
         setPreviewUrl(null);
         setUploadProgress(0);
         
-        await fetchHistory(user.uid);
+        await fetchDashboardData(user.uid);
         setActiveTab('history');
         
       } catch (err: any) {
@@ -537,7 +621,150 @@ export default function PatientPortal() {
   if (user) {
     return (
       <div className="min-h-screen bg-[#F8FAFC] dark:bg-[#030712] text-slate-900 dark:text-slate-100 flex relative overflow-hidden transition-colors duration-500 font-sans">
-        
+      {/* The Report Modal */}
+      {showReport && (
+        <div className="fixed inset-0 z-[999999] bg-[#f8f9fa] overflow-y-auto print:bg-white text-slate-900 animate-in fade-in zoom-in-95 duration-300 font-sans" style={{fontFamily: "'Inter', sans-serif"}}>
+          <style>{`
+            @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@600;800&family=Inter:wght@300;400;600&display=swap');
+            @media print {
+              .no-print { display: none !important; }
+              body { background: white; }
+              .pdf-container { box-shadow: none !important; border: none !important; margin: 0 !important; max-width: 100% !important; padding: 0 !important; }
+              .print-break { page-break-before: always; }
+            }
+            .cinzel-font { font-family: 'Cinzel', serif; }
+            .inter-font { font-family: 'Inter', sans-serif; }
+          `}</style>
+          
+          {/* Header - No Print */}
+          <div className="max-w-[21cm] mx-auto pt-8 px-8 no-print flex justify-end gap-4">
+            <button onClick={() => setShowReport(false)} className="px-5 py-2.5 bg-slate-200 rounded-lg font-bold text-slate-700 hover:bg-slate-300 transition-colors shadow-sm">Cancel</button>
+            <button onClick={() => window.print()} className="px-6 py-2.5 bg-[#0f172a] rounded-lg font-bold text-white hover:bg-black shadow-lg flex items-center gap-2 transition-colors">
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"></path></svg>
+              Print / Save as PDF
+            </button>
+          </div>
+
+          <div className="max-w-[21cm] mx-auto p-12 md:p-16 bg-white min-h-[29.7cm] my-8 shadow-[0_10px_40px_rgba(0,0,0,0.08)] border border-slate-200 pdf-container relative">
+            
+            {/* Top Branding Accent */}
+            <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-[#94a3b8] via-[#475569] to-[#0f172a]"></div>
+
+            {/* Clinical Header */}
+            <div className="flex justify-between items-end border-b pb-6 mb-8 border-slate-200">
+              <div>
+                <h1 className="text-4xl cinzel-font font-extrabold text-[#0f172a] tracking-tight mb-1">FACEVISTA</h1>
+                <h2 className="text-xs inter-font font-bold text-[#64748b] uppercase tracking-[0.2em]">Clinical Simulation Report</h2>
+              </div>
+              <div className="text-right">
+                <p className="font-bold text-sm text-[#0f172a]">Attending: {user.displayName || "Dr. Smith"}</p>
+                <p className="text-[#64748b] text-xs mt-1">Date of Consultation: {new Date().toLocaleDateString()}</p>
+              </div>
+            </div>
+
+            {/* Patient Details */}
+            <div className="bg-[#f8fafc] border border-[#e2e8f0] p-6 rounded-lg mb-8">
+               <h3 className="font-bold uppercase tracking-[0.1em] text-[#94a3b8] text-[10px] mb-4">Patient Information</h3>
+               <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <p className="text-[11px] text-[#64748b] font-semibold mb-1">Patient Identifier</p>
+                    <p className="font-bold text-[#0f172a]">{selectedPatientId || "GUEST-UNASSIGNED"}</p>
+                  </div>
+                  <div>
+                    <p className="text-[11px] text-[#64748b] font-semibold mb-1">Scan Reference Hash</p>
+                    <p className="font-medium text-[#475569] font-mono text-xs">{selectedReport?.id || "N/A"}</p>
+                  </div>
+               </div>
+            </div>
+
+            {/* Visual Simulation (Surface Anatomy) */}
+            <div className="mb-10" style={{ pageBreakInside: 'avoid' }}>
+               <h3 className="font-bold uppercase tracking-[0.1em] text-[#94a3b8] text-[10px] mb-4 border-b border-slate-100 pb-2">Surface Anatomy Simulation</h3>
+               <div className="grid grid-cols-2 gap-6">
+                 <div>
+                   <p className="font-bold mb-3 text-xs text-[#475569] uppercase tracking-wider">Baseline (Original)</p>
+                   <div className="bg-slate-950 aspect-square flex items-center justify-center overflow-hidden border border-[#e2e8f0]">
+                     {reportImages?.orig ? <img src={reportImages.orig} className="w-full h-full object-contain" /> : <span className="text-slate-600">No Image</span>}
+                   </div>
+                 </div>
+                 <div>
+                   <p className="font-bold mb-3 text-xs text-[#0ea5e9] uppercase tracking-wider">Proposed Outcome</p>
+                   <div className="bg-slate-950 aspect-square flex items-center justify-center overflow-hidden border-2 border-[#0ea5e9]">
+                     {reportImages?.morph ? <img src={reportImages.morph} className="w-full h-full object-contain" /> : <span className="text-slate-600">No Image</span>}
+                   </div>
+                 </div>
+               </div>
+            </div>
+
+            {/* Visual Simulation (Structural Anatomy - Skeletons) */}
+            {reportImages?.origWireframe && reportImages?.morphWireframe && (
+              <div className="mb-10" style={{ pageBreakInside: 'avoid' }}>
+                 <h3 className="font-bold uppercase tracking-[0.1em] text-[#94a3b8] text-[10px] mb-4 border-b border-slate-100 pb-2">Structural Anatomy (Mesh Analysis)</h3>
+                 <div className="grid grid-cols-2 gap-6">
+                   <div>
+                     <p className="font-bold mb-3 text-xs text-[#475569] uppercase tracking-wider">Original Topography</p>
+                     <div className="bg-[#0f172a] aspect-square flex items-center justify-center overflow-hidden border border-[#e2e8f0]">
+                       <img src={reportImages.origWireframe} className="w-full h-full object-contain" />
+                     </div>
+                   </div>
+                   <div>
+                     <p className="font-bold mb-3 text-xs text-[#0ea5e9] uppercase tracking-wider">Target Topography</p>
+                     <div className="bg-[#0f172a] aspect-square flex items-center justify-center overflow-hidden border-2 border-[#0ea5e9]">
+                       <img src={reportImages.morphWireframe} className="w-full h-full object-contain" />
+                     </div>
+                   </div>
+                 </div>
+              </div>
+            )}
+
+            {/* Adjustments */}
+            <div className="mb-10 page-break-inside-avoid">
+               <h3 className="font-bold uppercase tracking-[0.1em] text-[#94a3b8] text-[10px] mb-4 border-b border-slate-100 pb-2">Proposed Morphological Modifications</h3>
+               <table className="w-full text-left border-collapse text-sm">
+                 <thead>
+                   <tr>
+                     <th className="py-2 font-bold text-[#475569] border-b border-slate-200">Craniofacial Region</th>
+                     <th className="py-2 font-bold text-[#475569] border-b border-slate-200 text-right">Metric Deflection</th>
+                   </tr>
+                 </thead>
+                 <tbody>
+                   <tr><td className="py-3 font-medium text-[#0f172a] border-b border-slate-50">Nasal Structure (Rhinoplasty)</td><td className="py-3 text-right font-mono text-[#0ea5e9] font-bold border-b border-slate-50">{noseAdjustment > 0 ? '+'+noseAdjustment : noseAdjustment} mm</td></tr>
+                   <tr><td className="py-3 font-medium text-[#0f172a] border-b border-slate-50">Jawline Width (Mandibular)</td><td className="py-3 text-right font-mono text-[#0ea5e9] font-bold border-b border-slate-50">{jawAdjustment > 0 ? '+'+jawAdjustment : jawAdjustment} mm</td></tr>
+                   <tr><td className="py-3 font-medium text-[#0f172a] border-b border-slate-50">Lip Volume (Augmentation)</td><td className="py-3 text-right font-mono text-[#0ea5e9] font-bold border-b border-slate-50">{lipsAdjustment > 0 ? '+'+lipsAdjustment : lipsAdjustment} mm</td></tr>
+                   <tr><td className="py-3 font-medium text-[#0f172a] border-b border-slate-50">Cheekbone Elevation (Zygomatic)</td><td className="py-3 text-right font-mono text-[#0ea5e9] font-bold border-b border-slate-50">{cheeksAdjustment > 0 ? '+'+cheeksAdjustment : cheeksAdjustment} mm</td></tr>
+                 </tbody>
+               </table>
+            </div>
+
+            {/* Terms & Conditions */}
+            <div className="mb-16 text-[11px] text-[#64748b] leading-relaxed text-justify mt-12 pt-6 border-t border-slate-200" style={{ pageBreakInside: 'avoid' }}>
+               <h3 className="font-bold uppercase tracking-[0.1em] text-[#94a3b8] mb-3 text-[10px]">Terms and Conditions of Surgery</h3>
+               <p>
+                 The visual simulations and structural meshes provided in this document are for conceptual planning and communication purposes only. 
+                 They do not guarantee an exact post-operative outcome. Human tissue heals in unpredictable ways, and surgical 
+                 results are subject to biological variability, post-operative swelling, individual healing capabilities, and underlying anatomical constraints.
+                 By signing below, the patient acknowledges that this report represents a theoretical surgical goal, not a legally binding guaranteed result, and 
+                 formally consents to the execution of the surgical plan outlined herein.
+               </p>
+            </div>
+
+            {/* Signatures */}
+            <div className="grid grid-cols-2 gap-16 mt-8" style={{ pageBreakInside: 'avoid' }}>
+               <div>
+                 <div className="border-b border-[#0f172a] h-12 mb-3"></div>
+                 <p className="font-bold text-[#0f172a] text-sm">Attending Surgeon / Doctor</p>
+                 <p className="text-xs text-[#64748b] mt-1">Date: _______________</p>
+               </div>
+               <div>
+                 <div className="border-b border-[#0f172a] h-12 mb-3"></div>
+                 <p className="font-bold text-[#0f172a] text-sm">Patient Signature</p>
+                 <p className="text-xs text-[#64748b] mt-1">Date: _______________</p>
+               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
         <input 
           type="file" 
           ref={fileInputRef} 
@@ -569,7 +796,7 @@ export default function PatientPortal() {
           <div className="px-6 pb-6">
             <div className="bg-white/50 dark:bg-black/20 rounded-2xl p-4 border border-white/40 dark:border-white/5 shadow-sm">
               <p className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest mb-1">Patient Profile</p>
-              <p className="text-sm font-bold text-slate-900 dark:text-white truncate">{user.email}</p>
+              <p className="text-sm font-bold text-slate-900 dark:text-white truncate">{user.displayName || user.email}</p>
             </div>
           </div>
 
@@ -610,7 +837,7 @@ export default function PatientPortal() {
           <header className="h-20 mb-6 rounded-[2rem] border border-white/60 dark:border-white/5 bg-white/60 dark:bg-slate-900/40 backdrop-blur-2xl flex items-center justify-between px-8 shadow-[0_8px_32px_rgba(0,0,0,0.02)] dark:shadow-black/20">
             <div>
               <h2 className="text-2xl font-extrabold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-slate-900 to-slate-500 dark:from-white dark:to-slate-400">
-                {activeTab === 'history' ? 'Preview History' : activeTab === 'settings' ? 'Account Settings' : 'Initialize New Scan'}
+                {activeTab === 'patients' ? 'Patient Management' : activeTab === 'history' ? 'All Patient Scans' : activeTab === 'settings' ? 'Account Settings' : 'Initialize New Scan'}
               </h2>
             </div>
             <div className="flex items-center gap-6">
@@ -632,12 +859,84 @@ export default function PatientPortal() {
           {/* Content Body */}
           <div className="flex-1 overflow-auto rounded-[2.5rem] border border-white/60 dark:border-white/5 bg-white/40 dark:bg-slate-900/20 backdrop-blur-xl p-8 shadow-[inset_0_2px_20px_rgba(0,0,0,0.02)] dark:shadow-[inset_0_2px_20px_rgba(255,255,255,0.02)] relative">
             
+                        {activeTab === 'patients' && (
+              <div className="max-w-6xl mx-auto h-full flex flex-col animate-in fade-in slide-in-from-bottom-8 duration-700 zoom-in-95">
+                <div className="flex justify-between items-center mb-8">
+                   <div>
+                     <h3 className="text-2xl font-bold text-slate-900 dark:text-white">Patient Database</h3>
+                     <p className="text-slate-500">Manage your patients and their 3D diagnostic records.</p>
+                   </div>
+                   <button onClick={() => setIsCreatingPatient(true)} className="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-3 rounded-2xl font-bold shadow-lg shadow-indigo-500/30 transition-all flex items-center gap-2">
+                     <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4"/></svg>
+                     Add New Patient
+                   </button>
+                </div>
+                
+                {isCreatingPatient && (
+                  <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-6 mb-8 shadow-xl">
+                    <h4 className="font-bold text-lg mb-4">Create New Patient Profile</h4>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                      <input type="text" placeholder="Full Name" className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl px-4 py-3 outline-none focus:border-indigo-500" value={newPatient.name} onChange={(e) => setNewPatient({...newPatient, name: e.target.value})} />
+                      <input type="date" className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl px-4 py-3 text-slate-500 outline-none focus:border-indigo-500" value={newPatient.dob} onChange={(e) => setNewPatient({...newPatient, dob: e.target.value})} />
+                      <select className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl px-4 py-3 text-slate-500 outline-none focus:border-indigo-500" value={newPatient.gender} onChange={(e) => setNewPatient({...newPatient, gender: e.target.value})}>
+                        <option value="">Select Gender</option><option value="Male">Male</option><option value="Female">Female</option><option value="Other">Other</option>
+                      </select>
+                      <input type="text" placeholder="Clinical Notes" className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl px-4 py-3 outline-none focus:border-indigo-500" value={newPatient.notes} onChange={(e) => setNewPatient({...newPatient, notes: e.target.value})} />
+                    </div>
+                    <div className="flex justify-end gap-3">
+                      <button onClick={() => setIsCreatingPatient(false)} className="px-5 py-2.5 rounded-xl font-bold text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 transition-all">Cancel</button>
+                      <button onClick={async () => {
+                         if (!newPatient.name) return;
+                         const p = { ...newPatient, doctorId: user.uid, createdAt: Date.now() };
+                         const docRef = await addDoc(collection(db, "patients"), p);
+                         setPatients([{ id: docRef.id, ...p }, ...patients]);
+                         setIsCreatingPatient(false);
+                         setNewPatient({ name: "", dob: "", gender: "", notes: "" });
+                      }} className="bg-emerald-500 hover:bg-emerald-600 text-white px-5 py-2.5 rounded-xl font-bold shadow-lg shadow-emerald-500/20 transition-all">Save Patient</button>
+                    </div>
+                  </div>
+                )}
+
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                  {patients.length === 0 ? (
+                    <div className="col-span-full py-20 text-center text-slate-500">No patients found. Add a patient to get started.</div>
+                  ) : patients.map(p => {
+                    const patientScans = historyDocs.filter(s => s.patientId === p.id);
+                    return (
+                      <div key={p.id} className="bg-white/50 dark:bg-slate-900/50 backdrop-blur-md border border-slate-200 dark:border-slate-800 rounded-3xl p-6 hover:shadow-xl transition-all cursor-pointer group" onClick={() => { setSelectedPatientId(p.id); setActiveTab('upload'); }}>
+                        <div className="flex items-start justify-between mb-4">
+                          <div className="w-12 h-12 rounded-full bg-indigo-100 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 flex items-center justify-center font-bold text-xl">{p.name.charAt(0).toUpperCase()}</div>
+                          <span className="px-3 py-1 bg-slate-100 dark:bg-slate-800 rounded-full text-xs font-bold text-slate-500">{patientScans.length} Scans</span>
+                        </div>
+                        <h4 className="font-bold text-lg text-slate-900 dark:text-white truncate">{p.name}</h4>
+                        <p className="text-sm text-slate-500 mt-1">{p.gender || 'Unknown'} • {p.dob || 'No DOB'}</p>
+                        <button className="mt-6 w-full py-3 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-bold text-sm group-hover:bg-indigo-600 group-hover:text-white transition-all">Upload Scan for Patient</button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+            
             {activeTab === 'upload' && (
               <div className="max-w-5xl mx-auto h-full flex flex-col animate-in fade-in slide-in-from-bottom-8 duration-700 zoom-in-95">
                 
                 <div className="grid lg:grid-cols-3 gap-8 h-full">
                   {/* Upload Dropzone */}
                   <div className="lg:col-span-2 flex flex-col">
+                    <div className="mb-6">
+                      <label className="block text-sm font-bold text-slate-700 dark:text-slate-300 mb-2">Assign to Patient (Optional)</label>
+                      <select 
+                        value={selectedPatientId} 
+                        onChange={(e) => setSelectedPatientId(e.target.value)}
+                        className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-3 outline-none focus:border-indigo-500 text-slate-700 dark:text-slate-300 shadow-sm"
+                      >
+                        <option value="">-- Select Patient --</option>
+                        {patients.map(p => (
+                          <option key={p.id} value={p.id}>{p.name}</option>
+                        ))}
+                      </select>
+                    </div>
                     <div className="bg-indigo-50/80 dark:bg-indigo-500/10 border border-indigo-100 dark:border-indigo-500/20 rounded-2xl p-5 mb-6 flex items-start gap-4 backdrop-blur-sm shadow-sm">
                       <div className="bg-indigo-100 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-400 p-2.5 rounded-xl">
                         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"></path></svg>
@@ -989,23 +1288,45 @@ export default function PatientPortal() {
                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"></path></svg>
                            AI Surgery Inspirations
                          </h3>
+                         
+                         {/* AI Chat Assistant */}
+                         <div className="mb-6">
+                           <form onSubmit={handleAiQuery} className="relative">
+                             <input 
+                               type="text" 
+                               placeholder="Type 'Make nose smaller'..." 
+                               value={aiQuery}
+                               onChange={(e) => setAiQuery(e.target.value)}
+                               disabled={isAiThinking}
+                               className="w-full bg-slate-950 border border-amber-500/30 focus:border-amber-500 rounded-xl py-3 pl-4 pr-12 text-sm text-white placeholder-slate-500 outline-none transition-all shadow-[0_0_15px_rgba(245,158,11,0.1)] focus:shadow-[0_0_20px_rgba(245,158,11,0.2)]"
+                             />
+                             <button type="submit" disabled={isAiThinking || !aiQuery.trim()} className="absolute right-2 top-1/2 -translate-y-1/2 w-8 h-8 flex items-center justify-center bg-amber-500 hover:bg-amber-400 text-slate-900 rounded-lg transition-colors disabled:opacity-50">
+                               {isAiThinking ? (
+                                 <div className="w-4 h-4 border-2 border-slate-900 border-t-transparent rounded-full animate-spin"></div>
+                               ) : (
+                                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"></path></svg>
+                               )}
+                             </button>
+                           </form>
+                           <p className="text-[9px] text-slate-500 mt-2 font-medium tracking-wide uppercase">Powered by FaceVista NLP</p>
+                         </div>
 
                          {/* Real-Time Adjustments */}
                          <div className="mb-6 p-4 bg-slate-800/80 rounded-xl border border-slate-700 space-y-4">
                            <div>
-                             <div className="flex justify-between mb-1">
+                             <div className="flex justify-between mb-1 items-center">
                                <h4 className="text-white text-[10px] font-bold uppercase tracking-wider">Nose Shrink</h4>
-                               <span className="text-indigo-400 text-[10px] font-bold">{noseAdjustment}</span>
+                               <input type="number" min="-30" max="30" value={noseAdjustment} onChange={(e) => setNoseAdjustment(parseFloat(e.target.value)||0)} className="w-12 bg-slate-900 border border-slate-700 rounded text-center text-indigo-400 text-[10px] font-bold outline-none" />
                              </div>
-                             <input type="range" min="-5" max="5" step="1" value={noseAdjustment} onChange={(e) => setNoseAdjustment(parseFloat(e.target.value))} className="w-full accent-indigo-500" />
+                             <input type="range" min="-30" max="30" step="1" value={noseAdjustment} onChange={(e) => setNoseAdjustment(parseFloat(e.target.value))} className="w-full accent-indigo-500" />
                            </div>
                            
                            <div>
-                             <div className="flex justify-between mb-1">
+                             <div className="flex justify-between mb-1 items-center">
                                <h4 className="text-white text-[10px] font-bold uppercase tracking-wider">Jaw Narrow</h4>
-                               <span className="text-emerald-400 text-[10px] font-bold">{jawAdjustment}</span>
+                               <input type="number" min="-30" max="30" value={jawAdjustment} onChange={(e) => setJawAdjustment(parseFloat(e.target.value)||0)} className="w-12 bg-slate-900 border border-slate-700 rounded text-center text-emerald-400 text-[10px] font-bold outline-none" />
                              </div>
-                             <input type="range" min="-5" max="5" step="1" value={jawAdjustment} onChange={(e) => setJawAdjustment(parseFloat(e.target.value))} className="w-full accent-emerald-500" />
+                             <input type="range" min="-30" max="30" step="1" value={jawAdjustment} onChange={(e) => setJawAdjustment(parseFloat(e.target.value))} className="w-full accent-emerald-500" />
                            </div>
 
                            <div>
@@ -1013,15 +1334,15 @@ export default function PatientPortal() {
                                <h4 className="text-white text-[10px] font-bold uppercase tracking-wider">Lip Plump</h4>
                                <span className="text-rose-400 text-[10px] font-bold">{lipsAdjustment}</span>
                              </div>
-                             <input type="range" min="-5" max="5" step="1" value={lipsAdjustment} onChange={(e) => setLipsAdjustment(parseFloat(e.target.value))} className="w-full accent-rose-500" />
+                             <input type="range" min="-30" max="30" step="1" value={lipsAdjustment} onChange={(e) => setLipsAdjustment(parseFloat(e.target.value))} className="w-full accent-rose-500" />
                            </div>
 
                            <div>
-                             <div className="flex justify-between mb-1">
+                             <div className="flex justify-between mb-1 items-center">
                                <h4 className="text-white text-[10px] font-bold uppercase tracking-wider">Cheek Lift</h4>
-                               <span className="text-amber-400 text-[10px] font-bold">{cheeksAdjustment}</span>
+                               <input type="number" min="-30" max="30" value={cheeksAdjustment} onChange={(e) => setCheeksAdjustment(parseFloat(e.target.value)||0)} className="w-12 bg-slate-900 border border-slate-700 rounded text-center text-amber-400 text-[10px] font-bold outline-none" />
                              </div>
-                             <input type="range" min="-5" max="5" step="1" value={cheeksAdjustment} onChange={(e) => setCheeksAdjustment(parseFloat(e.target.value))} className="w-full accent-amber-500" />
+                             <input type="range" min="-30" max="30" step="1" value={cheeksAdjustment} onChange={(e) => setCheeksAdjustment(parseFloat(e.target.value))} className="w-full accent-amber-500" />
                            </div>
                          </div>
 
@@ -1090,7 +1411,7 @@ export default function PatientPortal() {
                            {/* High-Quality Mini Face Render */}
                            <div className="w-full h-32 rounded-lg bg-slate-950 border border-slate-800/50 overflow-hidden relative pointer-events-none group-hover:brightness-110 transition-all">
                              {meshData && typeof window !== 'undefined' ? (
-                               <Canvas camera={{ position: [0, 0, 7], fov: 45 }}>
+                               <Canvas gl={{ preserveDrawingBuffer: true }} camera={{ position: [0, 0, 7], fov: 45 }}>
                                  <ambientLight intensity={0.8} />
                                  <directionalLight position={[0, 0, 10]} intensity={2.0} />
                                  <FaceMeshTextured sharedMesh={meshData} updateSignal={{current: 0}} imageUrl={selectedReport.originalImage} />
@@ -1119,6 +1440,16 @@ export default function PatientPortal() {
                 </div>
                 </div>
           
+                {suiteTab === "surgery" && (
+                  <div className="p-4 border-t border-slate-800 bg-slate-950 shrink-0 w-80 absolute bottom-0 left-0">
+                    <button onClick={generateReport} className="w-full bg-emerald-500 hover:bg-emerald-600 text-slate-900 font-extrabold uppercase tracking-widest text-sm py-4 rounded-xl shadow-lg shadow-emerald-500/20 transition-all flex justify-center items-center gap-2">
+                      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+                      Generate Clinical Report
+                    </button>
+                  </div>
+                )}
+
+          
                 {/* Main Viewers */}
                 <div className={`flex-1 p-4 grid gap-4 bg-slate-950 overflow-y-auto ${activeSuggestion ? 'grid-cols-2 grid-rows-2' : 'grid-cols-1 md:grid-cols-2'}`}>
                    {/* Box 1: Original 3D Mesh */}
@@ -1129,7 +1460,7 @@ export default function PatientPortal() {
                      </div>
                      <div className="flex-1 w-full h-full min-h-[300px]">
                         {sharedMesh && typeof window !== 'undefined' ? (
-                          <Canvas camera={{ position: [0, 0, 10], fov: 45 }}>
+                          <Canvas gl={{ preserveDrawingBuffer: true }} camera={{ position: [0, 0, 10], fov: 45 }}>
                             <ambientLight intensity={0.5} />
                             <pointLight position={[10, 10, 10]} intensity={1.5} />
                             <Stars radius={100} depth={50} count={5000} factor={4} saturation={0} fade speed={1} />
@@ -1148,7 +1479,7 @@ export default function PatientPortal() {
                      </div>
                      <div className="flex-1 w-full h-full min-h-[300px] flex items-center justify-center bg-slate-950 p-6">
                         {sharedMesh && typeof window !== 'undefined' ? (
-                          <Canvas camera={{ position: [0, 0, 10], fov: 45 }}>
+                          <Canvas gl={{ preserveDrawingBuffer: true }} camera={{ position: [0, 0, 10], fov: 45 }}>
                             <ambientLight intensity={0.6} />
                             <directionalLight position={[5, 10, 10]} intensity={2.0} />
                             <directionalLight position={[-5, 5, -5]} intensity={0.5} color="#4ade80" />
@@ -1170,7 +1501,7 @@ export default function PatientPortal() {
                          </div>
                          <div className="flex-1 w-full h-full min-h-[300px]">
                             {suggestedMesh && typeof window !== 'undefined' ? (
-                              <Canvas camera={{ position: [0, 0, 10], fov: 45 }}>
+                              <Canvas gl={{ preserveDrawingBuffer: true }} camera={{ position: [0, 0, 10], fov: 45 }}>
                                 <ambientLight intensity={0.5} />
                                 <pointLight position={[10, 10, 10]} intensity={1.5} />
                                 <Stars radius={100} depth={50} count={5000} factor={4} saturation={0} fade speed={1} />
@@ -1189,7 +1520,7 @@ export default function PatientPortal() {
                          </div>
                          <div className="flex-1 w-full h-full min-h-[300px] flex items-center justify-center bg-slate-950 p-6">
                             {suggestedMesh && typeof window !== 'undefined' ? (
-                              <Canvas camera={{ position: [0, 0, 10], fov: 45 }}>
+                              <Canvas gl={{ preserveDrawingBuffer: true }} camera={{ position: [0, 0, 10], fov: 45 }}>
                                 <ambientLight intensity={0.6} />
                                 <directionalLight position={[5, 10, 10]} intensity={2.0} />
                                 <directionalLight position={[-5, 5, -5]} intensity={0.5} color="#4ade80" />
@@ -1243,6 +1574,32 @@ export default function PatientPortal() {
           )}
 
           <form onSubmit={handleAuth} className="space-y-5">
+            {!isLogin && (
+              <>
+                <div>
+                  <label className="block text-sm font-bold text-slate-700 dark:text-slate-300 mb-2 uppercase tracking-wide">Full Name</label>
+                  <input 
+                    type="text" 
+                    required
+                    value={fullName}
+                    onChange={(e) => setFullName(e.target.value)}
+                    className="w-full px-5 py-4 bg-slate-50 dark:bg-slate-900/50 border border-slate-200 dark:border-slate-800 rounded-2xl focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none transition-all text-slate-900 dark:text-white placeholder-slate-400 font-medium"
+                    placeholder="Dr. Smith or John Doe"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-bold text-slate-700 dark:text-slate-300 mb-2 uppercase tracking-wide">I am a...</label>
+                  <select 
+                    value={role}
+                    onChange={(e) => setRole(e.target.value)}
+                    className="w-full px-5 py-4 bg-slate-50 dark:bg-slate-900/50 border border-slate-200 dark:border-slate-800 rounded-2xl focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none transition-all text-slate-900 dark:text-white font-medium"
+                  >
+                    <option value="Doctor">Doctor / Surgeon</option>
+                    <option value="Patient">Patient</option>
+                  </select>
+                </div>
+              </>
+            )}
             <div>
               <label className="block text-sm font-bold text-slate-700 dark:text-slate-300 mb-2 uppercase tracking-wide">Email address</label>
               <input 
