@@ -11,25 +11,76 @@ import * as THREE from 'three';
 import { useMemo } from 'react';
 import Delaunator from 'delaunator';
 
-export function useSharedFaceMesh(mesh3d: any[]) {
+export function useSharedFaceMesh(mesh3d: any[], adjustments: any = {}, originalMeshForUVs?: any[]) {
+  const { nose = 0, jaw = 0, lips = 0, cheeks = 0 } = adjustments;
+  
   const meshData = useMemo(() => {
     if (!mesh3d || mesh3d.length === 0) return null;
     const pos = new Float32Array(mesh3d.length * 3);
     const uvs = new Float32Array(mesh3d.length * 2);
-    const coords2d = [];
-    mesh3d.forEach((lm, i) => {
+    const coords2d: number[] = [];
+
+    const modifiedMesh = JSON.parse(JSON.stringify(mesh3d));
+
+    const applyMorph = (indices: number[], scaleX: number, scaleY: number, rad: number) => {
+      let cx = 0, cy = 0, count = 0;
+      indices.forEach(i => {
+        if (modifiedMesh[i]) { cx += modifiedMesh[i].x; cy += modifiedMesh[i].y; count++; }
+      });
+      if (count === 0) return;
+      cx /= count; cy /= count;
+      const radiusSq = rad * rad;
+      for (let i = 0; i < modifiedMesh.length; i++) {
+         const px = modifiedMesh[i].x;
+         const py = modifiedMesh[i].y;
+         const distSq = (px - cx) * (px - cx) + (py - cy) * (py - cy);
+         const w = distSq < radiusSq ? Math.exp(-distSq / (radiusSq * 0.4)) : 0;
+         if (w > 0.001) {
+            modifiedMesh[i].x = cx + (px - cx) * (1.0 + (scaleX - 1.0) * w);
+            modifiedMesh[i].y = cy + (py - cy) * (1.0 + (scaleY - 1.0) * w);
+         }
+      }
+    };
+
+    if (nose !== 0) {
+      const NOSE_ALL = [1, 2, 3, 4, 5, 6, 19, 45, 48, 51, 64, 94, 98, 115, 122, 141, 168, 195, 197, 220, 275, 278, 281, 294, 327, 344, 370, 440];
+      applyMorph(NOSE_ALL, 1.0 - (nose * 0.015), 1.0 - (nose * 0.015), 0.06);
+    }
+    if (jaw !== 0) {
+      const JAW_LEFT = [132, 58, 172, 136, 150, 149, 176, 148, 152];
+      const JAW_RIGHT = [361, 288, 397, 365, 379, 378, 400, 377, 152];
+      applyMorph(JAW_LEFT, 1.0 - (jaw * 0.015), 1.0, 0.08);
+      applyMorph(JAW_RIGHT, 1.0 - (jaw * 0.015), 1.0, 0.08);
+    }
+    if (lips !== 0) {
+      const LIPS_ALL = [61, 185, 40, 39, 37, 0, 267, 269, 270, 409, 291, 78, 82, 13, 312, 308, 317, 14, 87, 178, 146, 91, 181, 84, 17, 314, 405, 321, 375, 95, 88, 402, 318];
+      applyMorph(LIPS_ALL, 1.0, 1.0 + (lips * 0.02), 0.05);
+    }
+    if (cheeks !== 0) {
+      const CHEEK_LEFT = [36, 50, 187, 123, 116, 117, 118, 119, 120, 121, 192, 213, 147, 137];
+      const CHEEK_RIGHT = [266, 280, 411, 352, 345, 346, 347, 348, 349, 350, 416, 433, 376, 366];
+      applyMorph(CHEEK_LEFT, 1.0 + (cheeks * 0.015), 1.0 + (cheeks * 0.015), 0.07);
+      applyMorph(CHEEK_RIGHT, 1.0 + (cheeks * 0.015), 1.0 + (cheeks * 0.015), 0.07);
+    }
+
+    const uvMesh = originalMeshForUVs || mesh3d;
+    modifiedMesh.forEach((lm: any, i: number) => {
        pos[i*3] = (lm.x - 0.5) * 15;
        pos[i*3+1] = -(lm.y - 0.5) * 15;
        pos[i*3+2] = -lm.z * 15;
-       uvs[i*2] = lm.x;
-       uvs[i*2+1] = 1 - lm.y;
+       
+       const uvLm = uvMesh[i] || lm;
+       uvs[i*2] = uvLm.x;
+       uvs[i*2+1] = 1 - uvLm.y;
+       
        coords2d.push(lm.x, lm.y);
     });
     const delaunay = new Delaunator(coords2d);
-    return { positions: pos, uvs, indices: new Uint32Array(delaunay.triangles) };
-  }, [mesh3d]);
+    return { id: Math.random(), positions: pos, uvs, indices: new Uint32Array(delaunay.triangles) };
+  }, [mesh3d, nose, jaw, lips, cheeks, originalMeshForUVs]);
 
   const updateSignal = useRef(0);
+  useEffect(() => { updateSignal.current++; }, [meshData]);
   return { meshData, updateSignal };
 }
 
@@ -40,6 +91,20 @@ export function FaceMeshWireframe({ sharedMesh, updateSignal }: any) {
   const dragRef = useRef<{ idx: number, lastX: number, lastY: number } | null>(null);
   const [hovered, setHovered] = useState(false);
   const pointsGeomRef = useRef<any>(null);
+  const lastUpdate = useRef(0);
+  const lastUpdatePoints = useRef(0);
+
+  useFrame(() => {
+    if (geomRef.current && lastUpdate.current !== updateSignal.current) {
+      geomRef.current.attributes.position.needsUpdate = true;
+      if (geomRef.current.index) geomRef.current.index.needsUpdate = true;
+      lastUpdate.current = updateSignal.current;
+    }
+    if (pointsGeomRef.current && lastUpdatePoints.current !== updateSignal.current) {
+      pointsGeomRef.current.attributes.position.needsUpdate = true;
+      lastUpdatePoints.current = updateSignal.current;
+    }
+  });
 
   const handlePointerDown = (e: any) => {
     e.stopPropagation();
@@ -119,7 +184,7 @@ export function FaceMeshWireframe({ sharedMesh, updateSignal }: any) {
          onPointerLeave={(e) => { handlePointerUp(e); setHovered(false); document.body.style.cursor = 'auto'; }}
          onPointerEnter={() => { setHovered(true); document.body.style.cursor = 'pointer'; }}
       >
-         <bufferGeometry ref={geomRef}>
+         <bufferGeometry ref={geomRef} key={sharedMesh.id}>
            <bufferAttribute attach="attributes-position" count={sharedMesh.positions.length / 3} array={sharedMesh.positions} itemSize={3} />
            <bufferAttribute attach="index" count={sharedMesh.indices.length} array={sharedMesh.indices} itemSize={1} />
          </bufferGeometry>
@@ -135,7 +200,7 @@ export function FaceMeshWireframe({ sharedMesh, updateSignal }: any) {
          />
       </mesh>
       <points>
-         <bufferGeometry ref={pointsGeomRef}>
+         <bufferGeometry ref={pointsGeomRef} key={sharedMesh.id + "pts"}>
            <bufferAttribute attach="attributes-position" count={sharedMesh.positions.length / 3} array={sharedMesh.positions} itemSize={3} />
          </bufferGeometry>
          <pointsMaterial size={0.08} color="#38bdf8" sizeAttenuation transparent opacity={0.9} />
@@ -152,9 +217,7 @@ export function FaceMeshTextured({ sharedMesh, updateSignal, imageUrl }: any) {
   const lastUpdate = useRef(0);
 
   useEffect(() => {
-    if (geomRef.current) {
-      geomRef.current.computeVertexNormals();
-    }
+    // No normal computation needed for Basic Material
   }, [sharedMesh]);
 
   useFrame((state) => {
@@ -165,7 +228,8 @@ export function FaceMeshTextured({ sharedMesh, updateSignal, imageUrl }: any) {
     }
     if (geomRef.current && lastUpdate.current !== updateSignal.current) {
       geomRef.current.attributes.position.needsUpdate = true;
-      geomRef.current.computeVertexNormals();
+      if (geomRef.current.attributes.uv) geomRef.current.attributes.uv.needsUpdate = true;
+      if (geomRef.current.index) geomRef.current.index.needsUpdate = true;
       lastUpdate.current = updateSignal.current;
     }
   });
@@ -177,12 +241,12 @@ export function FaceMeshTextured({ sharedMesh, updateSignal, imageUrl }: any) {
       
       <group ref={groupRef}>
         <mesh>
-           <bufferGeometry ref={geomRef}>
+           <bufferGeometry ref={geomRef} key={sharedMesh.id}>
              <bufferAttribute attach="attributes-position" count={sharedMesh.positions.length / 3} array={sharedMesh.positions} itemSize={3} />
              <bufferAttribute attach="attributes-uv" count={sharedMesh.uvs.length / 2} array={sharedMesh.uvs} itemSize={2} />
              <bufferAttribute attach="index" count={sharedMesh.indices.length} array={sharedMesh.indices} itemSize={1} />
            </bufferGeometry>
-           <meshStandardMaterial map={texture} side={THREE.DoubleSide} roughness={0.5} metalness={0.05} transparent opacity={1} />
+           <meshBasicMaterial map={texture} side={THREE.DoubleSide} transparent opacity={1} />
         </mesh>
       </group>
     </group>
@@ -200,8 +264,14 @@ export default function PatientPortal() {
   // Advanced Diagnostic Suite State
   const [selectedReport, setSelectedReport] = useState<any>(null);
   const [activeSuggestion, setActiveSuggestion] = useState<any>(null);
-  const activeMesh3d = activeSuggestion?.mesh3d || selectedReport?.mesh3d;
-  const { meshData: sharedMesh, updateSignal } = useSharedFaceMesh(activeMesh3d);
+  const [noseAdjustment, setNoseAdjustment] = useState<number>(0);
+  const [jawAdjustment, setJawAdjustment] = useState<number>(0);
+  const [lipsAdjustment, setLipsAdjustment] = useState<number>(0);
+  const [cheeksAdjustment, setCheeksAdjustment] = useState<number>(0);
+  
+  const adjustments = { nose: noseAdjustment, jaw: jawAdjustment, lips: lipsAdjustment, cheeks: cheeksAdjustment };
+  const { meshData: sharedMesh, updateSignal } = useSharedFaceMesh(selectedReport?.mesh3d, adjustments, selectedReport?.mesh3d);
+  const { meshData: suggestedMesh, updateSignal: suggestedUpdateSignal } = useSharedFaceMesh(activeSuggestion?.mesh3d, adjustments, selectedReport?.mesh3d);
   
   const [suiteTab, setSuiteTab] = useState("analytics");
   const [isFetchingSuggestions, setIsFetchingSuggestions] = useState(false);
@@ -920,9 +990,44 @@ export default function PatientPortal() {
                            AI Surgery Inspirations
                          </h3>
 
+                         {/* Real-Time Adjustments */}
+                         <div className="mb-6 p-4 bg-slate-800/80 rounded-xl border border-slate-700 space-y-4">
+                           <div>
+                             <div className="flex justify-between mb-1">
+                               <h4 className="text-white text-[10px] font-bold uppercase tracking-wider">Nose Shrink</h4>
+                               <span className="text-indigo-400 text-[10px] font-bold">{noseAdjustment}</span>
+                             </div>
+                             <input type="range" min="-5" max="5" step="1" value={noseAdjustment} onChange={(e) => setNoseAdjustment(parseFloat(e.target.value))} className="w-full accent-indigo-500" />
+                           </div>
+                           
+                           <div>
+                             <div className="flex justify-between mb-1">
+                               <h4 className="text-white text-[10px] font-bold uppercase tracking-wider">Jaw Narrow</h4>
+                               <span className="text-emerald-400 text-[10px] font-bold">{jawAdjustment}</span>
+                             </div>
+                             <input type="range" min="-5" max="5" step="1" value={jawAdjustment} onChange={(e) => setJawAdjustment(parseFloat(e.target.value))} className="w-full accent-emerald-500" />
+                           </div>
+
+                           <div>
+                             <div className="flex justify-between mb-1">
+                               <h4 className="text-white text-[10px] font-bold uppercase tracking-wider">Lip Plump</h4>
+                               <span className="text-rose-400 text-[10px] font-bold">{lipsAdjustment}</span>
+                             </div>
+                             <input type="range" min="-5" max="5" step="1" value={lipsAdjustment} onChange={(e) => setLipsAdjustment(parseFloat(e.target.value))} className="w-full accent-rose-500" />
+                           </div>
+
+                           <div>
+                             <div className="flex justify-between mb-1">
+                               <h4 className="text-white text-[10px] font-bold uppercase tracking-wider">Cheek Lift</h4>
+                               <span className="text-amber-400 text-[10px] font-bold">{cheeksAdjustment}</span>
+                             </div>
+                             <input type="range" min="-5" max="5" step="1" value={cheeksAdjustment} onChange={(e) => setCheeksAdjustment(parseFloat(e.target.value))} className="w-full accent-amber-500" />
+                           </div>
+                         </div>
+
                          {/* Reset to Original */}
                          <button
-                           onClick={() => setActiveSuggestion(null)}
+                           onClick={() => { setActiveSuggestion(null); setNoseAdjustment(0); setJawAdjustment(0); setLipsAdjustment(0); setCheeksAdjustment(0); }}
                            className={`w-full mb-3 flex items-center gap-3 p-3 rounded-xl transition-all border text-left ${
                              !activeSuggestion
                                ? 'bg-white/10 border-white/30 ring-2 ring-white/20'
@@ -1015,21 +1120,15 @@ export default function PatientPortal() {
                 </div>
           
                 {/* Main Viewers */}
-                <div className="flex-1 p-6 grid grid-cols-1 md:grid-cols-2 gap-6 bg-slate-950 overflow-y-auto">
-                   {/* 3D Viewer */}
+                <div className={`flex-1 p-4 grid gap-4 bg-slate-950 overflow-y-auto ${activeSuggestion ? 'grid-cols-2 grid-rows-2' : 'grid-cols-1 md:grid-cols-2'}`}>
+                   {/* Box 1: Original 3D Mesh */}
                    <div className="bg-slate-900 rounded-3xl border border-slate-800 overflow-hidden relative flex flex-col shadow-2xl">
                      <div className="absolute top-4 left-4 z-10 bg-black/80 backdrop-blur-md px-4 py-2 rounded-full text-xs font-bold text-indigo-400 tracking-widest border border-indigo-500/30 flex items-center gap-2">
                        <span className="w-2 h-2 rounded-full bg-indigo-500 animate-pulse"></span>
-                       INTERACTIVE 3D MESH
+                       ORIGINAL MESH
                      </div>
-                     {activeSuggestion && (
-                       <div className="absolute top-4 right-4 z-10 bg-black/80 backdrop-blur-md px-3 py-1.5 rounded-full text-[10px] font-bold tracking-wider border flex items-center gap-2" style={{ color: activeSuggestion.color, borderColor: activeSuggestion.color + '40' }}>
-                         <span className="text-base">{activeSuggestion.icon}</span>
-                         {activeSuggestion.name}
-                       </div>
-                     )}
-                     <div className="flex-1 w-full h-full min-h-[400px]">
-                       {sharedMesh && typeof window !== 'undefined' ? (
+                     <div className="flex-1 w-full h-full min-h-[300px]">
+                        {sharedMesh && typeof window !== 'undefined' ? (
                           <Canvas camera={{ position: [0, 0, 10], fov: 45 }}>
                             <ambientLight intensity={0.5} />
                             <pointLight position={[10, 10, 10]} intensity={1.5} />
@@ -1037,22 +1136,17 @@ export default function PatientPortal() {
                             <OrbitControls makeDefault enableZoom={true} target={[0, 0, 0]} />
                             <FaceMeshWireframe sharedMesh={sharedMesh} updateSignal={updateSignal} />
                           </Canvas>
-                       ) : (
-                          <div className="flex h-full flex-col items-center justify-center text-slate-500 font-bold uppercase tracking-widest text-sm p-8 text-center bg-slate-900/50">
-                            <svg className="w-12 h-12 mb-4 text-slate-700" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1" d="M14 10l-2 1m0 0l-2-1m2 1v2.5M20 7l-2 1m2-1l-2-1m2 1v2.5M14 4l-2-1-2 1M4 7l2-1M4 7l2 1M4 7v2.5M12 21l-2-1m2 1l2-1m-2 1v-2.5M6 18l-2-1v-2.5M18 18l2-1v-2.5"></path></svg>
-                            3D Data Unavailable<br/><span className="text-[10px] mt-2 text-slate-600 normal-case">Upload a new photo to generate the 3D mesh map.</span>
-                          </div>
-                       )}
+                        ) : null}
                      </div>
                    </div>
           
-                   {/* 2D Overlay Viewer -> REAL-TIME TEXTURE SYNC VIEWER */}
+                   {/* Box 2: Original Textured Picture */}
                    <div className="bg-slate-900 rounded-3xl border border-slate-800 overflow-hidden relative flex flex-col shadow-2xl">
                      <div className="absolute top-4 left-4 z-10 bg-black/80 backdrop-blur-md px-4 py-2 rounded-full text-xs font-bold text-emerald-400 tracking-widest border border-emerald-500/30 flex items-center gap-2">
                        <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-                       REAL-TIME TEXTURE SYNC
+                       ORIGINAL PICTURE
                      </div>
-                     <div className="flex-1 w-full h-full min-h-[400px] flex items-center justify-center bg-slate-950 p-6">
+                     <div className="flex-1 w-full h-full min-h-[300px] flex items-center justify-center bg-slate-950 p-6">
                         {sharedMesh && typeof window !== 'undefined' ? (
                           <Canvas camera={{ position: [0, 0, 10], fov: 45 }}>
                             <ambientLight intensity={0.6} />
@@ -1061,11 +1155,52 @@ export default function PatientPortal() {
                             <OrbitControls makeDefault enableZoom={true} target={[0, 0, 0]} />
                             <FaceMeshTextured sharedMesh={sharedMesh} updateSignal={updateSignal} imageUrl={selectedReport.originalImage} />
                           </Canvas>
-                        ) : (
-                          <img src={selectedReport.analyzedImage || selectedReport.originalImage} className="max-w-full max-h-full object-contain rounded-2xl shadow-[0_0_30px_rgba(79,70,229,0.15)] border border-slate-800" />
-                        )}
+                        ) : null}
                      </div>
                    </div>
+
+                   {/* Conditional rendering of 2 more boxes for Recommendation */}
+                   {activeSuggestion && (
+                     <>
+                       {/* Box 3: Recommended 3D Mesh */}
+                       <div className="bg-slate-900 rounded-3xl border border-slate-800 overflow-hidden relative flex flex-col shadow-2xl">
+                         <div className="absolute top-4 left-4 z-10 bg-black/80 backdrop-blur-md px-4 py-2 rounded-full text-xs font-bold tracking-widest border flex items-center gap-2" style={{ color: activeSuggestion.color, borderColor: activeSuggestion.color + '40' }}>
+                           <span className="w-2 h-2 rounded-full animate-pulse" style={{ backgroundColor: activeSuggestion.color }}></span>
+                           RECOMMENDED MESH
+                         </div>
+                         <div className="flex-1 w-full h-full min-h-[300px]">
+                            {suggestedMesh && typeof window !== 'undefined' ? (
+                              <Canvas camera={{ position: [0, 0, 10], fov: 45 }}>
+                                <ambientLight intensity={0.5} />
+                                <pointLight position={[10, 10, 10]} intensity={1.5} />
+                                <Stars radius={100} depth={50} count={5000} factor={4} saturation={0} fade speed={1} />
+                                <OrbitControls makeDefault enableZoom={true} target={[0, 0, 0]} />
+                                <FaceMeshWireframe sharedMesh={suggestedMesh} updateSignal={suggestedUpdateSignal} />
+                              </Canvas>
+                            ) : null}
+                         </div>
+                       </div>
+
+                       {/* Box 4: Recommended Textured Picture */}
+                       <div className="bg-slate-900 rounded-3xl border border-slate-800 overflow-hidden relative flex flex-col shadow-2xl">
+                         <div className="absolute top-4 left-4 z-10 bg-black/80 backdrop-blur-md px-4 py-2 rounded-full text-xs font-bold tracking-widest border flex items-center gap-2" style={{ color: activeSuggestion.color, borderColor: activeSuggestion.color + '40' }}>
+                           <span className="w-2 h-2 rounded-full animate-pulse" style={{ backgroundColor: activeSuggestion.color }}></span>
+                           RECOMMENDED PICTURE
+                         </div>
+                         <div className="flex-1 w-full h-full min-h-[300px] flex items-center justify-center bg-slate-950 p-6">
+                            {suggestedMesh && typeof window !== 'undefined' ? (
+                              <Canvas camera={{ position: [0, 0, 10], fov: 45 }}>
+                                <ambientLight intensity={0.6} />
+                                <directionalLight position={[5, 10, 10]} intensity={2.0} />
+                                <directionalLight position={[-5, 5, -5]} intensity={0.5} color="#4ade80" />
+                                <OrbitControls makeDefault enableZoom={true} target={[0, 0, 0]} />
+                                <FaceMeshTextured sharedMesh={suggestedMesh} updateSignal={suggestedUpdateSignal} imageUrl={selectedReport.originalImage} />
+                              </Canvas>
+                            ) : null}
+                         </div>
+                       </div>
+                     </>
+                   )}
                 </div>
               </div>
             </div>

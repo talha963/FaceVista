@@ -8,6 +8,7 @@ import numpy as np
 import copy
 from typing import List, Dict, Optional
 
+
 app = FastAPI()
 
 # Enable CORS so Next.js can call it directly from the browser if needed
@@ -24,7 +25,7 @@ face_mesh = mp_face_mesh.FaceMesh(
     static_image_mode=True,
     max_num_faces=1,
     refine_landmarks=True,
-    min_detection_confidence=0.5
+    min_detection_confidence=0.75
 )
 mp_drawing = mp.solutions.drawing_utils
 mp_drawing_styles = mp.solutions.drawing_styles
@@ -117,107 +118,78 @@ def _apply_region_morph(
 
 
 def generate_surgery_suggestions(mesh3d: List[Dict[str, float]]) -> List[Dict]:
-    """
-    Generate 5 clinically-inspired face surgery suggestions.
-    Each suggestion applies subtle, realistic morphs to specific facial regions.
-    """
     suggestions = []
 
-    # ── 1. RHINOPLASTY (Nose Refinement) ──
-    # Slims the nose bridge and slightly lifts the tip
+    # ── 1. RHINOPLASTY (Refinement) ──
     morph = copy.deepcopy(mesh3d)
-    morph = _apply_region_morph(morph, NOSE_WING_LEFT + NOSE_WING_RIGHT, 
-                                 dx=0.0, dy=0.0, dz=0.0, radius=0.06, scale_x=0.92)
-    morph = _apply_region_morph(morph, NOSE_TIP_INDICES, 
-                                 dx=0.0, dy=-0.006, dz=-0.004, radius=0.04)
-    morph = _apply_region_morph(morph, NOSE_BRIDGE_INDICES,
-                                 dx=0.0, dy=0.0, dz=-0.003, radius=0.05, scale_x=0.95)
+    morph = _apply_region_morph(morph, NOSE_WING_LEFT + NOSE_WING_RIGHT, dx=0.0, dy=0.0, dz=0.0, radius=0.06, scale_x=0.85)
+    morph = _apply_region_morph(morph, NOSE_TIP_INDICES, dx=0.0, dy=-0.015, dz=-0.01, radius=0.05, scale_x=0.85)
+    morph = _apply_region_morph(morph, NOSE_BRIDGE_INDICES, dx=0.0, dy=0.0, dz=-0.01, radius=0.06, scale_x=0.85)
     suggestions.append({
         "id": "rhinoplasty",
         "name": "Rhinoplasty",
-        "description": "Refined nose bridge with subtle tip lift for balanced proportions",
+        "description": "Aggressive nose bridge refinement and tip lift",
         "category": "Nose",
         "icon": "👃",
         "color": "#818cf8",
         "mesh3d": morph,
     })
 
-    # ── 2. JAWLINE CONTOURING ──
-    # Slims the jaw and sharpens the chin for a V-line shape
+    # ── 2. JAWLINE CONTOURING (V-Line Surgery) ──
     morph = copy.deepcopy(mesh3d)
-    morph = _apply_region_morph(morph, JAW_LEFT, 
-                                 dx=0.008, dy=0.0, dz=0.0, radius=0.08, scale_x=0.94)
-    morph = _apply_region_morph(morph, JAW_RIGHT, 
-                                 dx=-0.008, dy=0.0, dz=0.0, radius=0.08, scale_x=0.94)
-    morph = _apply_region_morph(morph, JAW_CHIN, 
-                                 dx=0.0, dy=-0.005, dz=-0.002, radius=0.06)
+    morph = _apply_region_morph(morph, JAW_LEFT, dx=0.015, dy=0.0, dz=0.0, radius=0.1, scale_x=0.9)
+    morph = _apply_region_morph(morph, JAW_RIGHT, dx=-0.015, dy=0.0, dz=0.0, radius=0.1, scale_x=0.9)
+    morph = _apply_region_morph(morph, JAW_CHIN, dx=0.0, dy=-0.015, dz=-0.01, radius=0.08)
     suggestions.append({
         "id": "jawline",
-        "name": "Jawline Contour",
-        "description": "Sharper V-line jawline with refined chin projection",
+        "name": "V-Line Jaw Contour",
+        "description": "Dramatic V-line jaw reduction and chin sharpening",
         "category": "Jaw",
         "icon": "💎",
         "color": "#34d399",
-    	"mesh3d": morph,
+        "mesh3d": morph,
     })
 
-    # ── 3. CHEEKBONE LIFT ──
-    # Enhances cheekbones upward and outward for more definition
+    # ── 3. CHEEKBONE LIFT (High Cheekbones) ──
     morph = copy.deepcopy(mesh3d)
-    morph = _apply_region_morph(morph, CHEEK_LEFT, 
-                                 dx=-0.005, dy=-0.008, dz=-0.004, radius=0.07)
-    morph = _apply_region_morph(morph, CHEEK_RIGHT, 
-                                 dx=0.005, dy=-0.008, dz=-0.004, radius=0.07)
+    morph = _apply_region_morph(morph, CHEEK_LEFT, dx=-0.01, dy=-0.015, dz=-0.01, radius=0.08, scale_x=1.05, scale_y=1.05)
+    morph = _apply_region_morph(morph, CHEEK_RIGHT, dx=0.01, dy=-0.015, dz=-0.01, radius=0.08, scale_x=1.05, scale_y=1.05)
     suggestions.append({
         "id": "cheekbone",
-        "name": "Cheekbone Lift",
-        "description": "Enhanced cheekbone prominence for sculpted facial contour",
+        "name": "High Cheekbone Lift",
+        "description": "Pronounced cheekbone augmentation and lifting",
         "category": "Cheeks",
         "icon": "✨",
         "color": "#f472b6",
-    	"mesh3d": morph,
+        "mesh3d": morph,
     })
 
-    # ── 4. LIP ENHANCEMENT ──
-    # Fuller lips with balanced upper/lower proportion
+    # ── 4. LIP ENHANCEMENT (Plumping) ──
     morph = copy.deepcopy(mesh3d)
-    morph = _apply_region_morph(morph, LIPS_UPPER,
-                                 dx=0.0, dy=-0.004, dz=-0.003, radius=0.04, scale_y=1.15)
-    morph = _apply_region_morph(morph, LIPS_LOWER,
-                                 dx=0.0, dy=0.003, dz=-0.002, radius=0.04, scale_y=1.1)
+    morph = _apply_region_morph(morph, LIPS_UPPER, dx=0.0, dy=-0.005, dz=-0.005, radius=0.05, scale_y=1.15, scale_x=1.05)
+    morph = _apply_region_morph(morph, LIPS_LOWER, dx=0.0, dy=0.005, dz=-0.005, radius=0.05, scale_y=1.15, scale_x=1.05)
     suggestions.append({
         "id": "lip_enhancement",
         "name": "Lip Enhancement",
-        "description": "Natural volume boost with balanced upper-to-lower lip ratio",
+        "description": "Dramatic lip volume boost and plumping",
         "category": "Lips",
         "icon": "💋",
         "color": "#fb923c",
         "mesh3d": morph,
     })
 
-    # ── 5. FULL HARMONY (Combined Subtle) ──
-    # A gentle combination of all procedures for overall balance
+    # ── 5. FULL HARMONY (Extreme Makeover) ──
     morph = copy.deepcopy(mesh3d)
-    # Subtle nose slim
-    morph = _apply_region_morph(morph, NOSE_ALL,
-                                 dx=0.0, dy=-0.003, dz=-0.002, radius=0.05, scale_x=0.96)
-    # Subtle jaw contour
-    morph = _apply_region_morph(morph, JAW_LEFT,
-                                 dx=0.004, dy=0.0, dz=0.0, radius=0.07, scale_x=0.97)
-    morph = _apply_region_morph(morph, JAW_RIGHT,
-                                 dx=-0.004, dy=0.0, dz=0.0, radius=0.07, scale_x=0.97)
-    # Subtle cheek lift
-    morph = _apply_region_morph(morph, CHEEK_LEFT,
-                                 dx=-0.003, dy=-0.004, dz=-0.002, radius=0.06)
-    morph = _apply_region_morph(morph, CHEEK_RIGHT,
-                                 dx=0.003, dy=-0.004, dz=-0.002, radius=0.06)
-    # Gentle lip plump
-    morph = _apply_region_morph(morph, LIPS_ALL,
-                                 dx=0.0, dy=0.0, dz=-0.001, radius=0.03, scale_y=1.06)
+    morph = _apply_region_morph(morph, NOSE_ALL, dx=0.0, dy=-0.01, dz=-0.01, radius=0.07, scale_x=0.85)
+    morph = _apply_region_morph(morph, JAW_LEFT, dx=0.015, dy=0.0, dz=0.0, radius=0.1, scale_x=0.9)
+    morph = _apply_region_morph(morph, JAW_RIGHT, dx=-0.015, dy=0.0, dz=0.0, radius=0.1, scale_x=0.9)
+    morph = _apply_region_morph(morph, CHEEK_LEFT, dx=-0.01, dy=-0.01, dz=-0.005, radius=0.07)
+    morph = _apply_region_morph(morph, CHEEK_RIGHT, dx=0.01, dy=-0.01, dz=-0.005, radius=0.07)
+    morph = _apply_region_morph(morph, LIPS_ALL, dx=0.0, dy=0.0, dz=-0.005, radius=0.04, scale_y=1.1)
     suggestions.append({
         "id": "full_harmony",
-        "name": "Full Harmony",
-        "description": "Balanced combination of subtle refinements for complete facial harmony",
+        "name": "Extreme Makeover",
+        "description": "A completely transformed facial structure combining all procedures",
         "category": "Complete",
         "icon": "🌟",
         "color": "#a78bfa",
@@ -225,6 +197,8 @@ def generate_surgery_suggestions(mesh3d: List[Dict[str, float]]) -> List[Dict]:
     })
 
     return suggestions
+
+
 
 
 @app.post("/analyze")
@@ -285,10 +259,10 @@ async def analyze_image(req: AnalyzeRequest):
     output_path = os.path.join(UPLOAD_DIR, output_filename)
     cv2.imwrite(output_path, final_image)
 
-    # Extract the 3D point cloud for the frontend to generate the 3D face
+    # Extract the 3D point cloud for the frontend to generate the 3D face (exclude 10 iris landmarks)
     mesh_3d = []
     if results.multi_face_landmarks:
-        for landmark in results.multi_face_landmarks[0].landmark:
+        for landmark in list(results.multi_face_landmarks[0].landmark)[:468]:
             mesh_3d.append({"x": landmark.x, "y": landmark.y, "z": landmark.z})
 
     # Generate AI surgery suggestions based on the extracted face mesh
